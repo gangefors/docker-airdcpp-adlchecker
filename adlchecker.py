@@ -14,7 +14,7 @@ Usage:
   ./adlsearch.py --help
   
   This script can also be run using Docker:
-    docker run --rm --volumes-from <gangefors/airdcpp-webclient container> gangefors/adlchecker --help
+    docker run --rm --volumes-from <airdcpp-container> gangefors/airdcpp-adlchecker --help
 """
 # pylint: disable=missing-class-docstring
 # pylint: disable=missing-function-docstring
