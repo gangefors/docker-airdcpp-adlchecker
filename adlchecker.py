@@ -12,7 +12,7 @@ Optional:
 
 Usage:
   ./adlsearch.py --help
-  
+
   This script can also be run using Docker:
     docker run --rm --volumes-from <airdcpp-container> gangefors/airdcpp-adlchecker --help
 """
@@ -155,6 +155,12 @@ def get_cli_arguments() -> Namespace:
         default=False,
         help="Print progress while scanning.",
     )
+    parser.add_argument(
+        "--no-db",
+        action="store_true",
+        default=False,
+        help="Don't use the FileIndex DB, instead stat files on fs.",
+    )
 
     return parser.parse_args()
 
@@ -171,8 +177,8 @@ def find_config_in_bootfile() -> Optional[str]:
     return replace_bootfile_vars(element.text) if element is not None else None
 
 
-def replace_bootfile_vars(text: str) -> str:
-    return text.replace("%[HOME]", path.expanduser("~/"))
+def replace_bootfile_vars(text: Optional[str]) -> Optional[str]:
+    return text.replace("%[HOME]", path.expanduser("~/")) if text else None
 
 
 def find_config_from_default() -> Optional[str]:
@@ -212,16 +218,16 @@ def perform_adl_search(
     ):
         if config.print_progress:
             print_progress(i, total)
-        if is_adl_match(match.adl_item, match.share_item, config):
+        if is_adl_match(match.adl_item, match.share_item):
             matches.append(match)
     return matches
 
 
-def is_adl_match(adl_item: ADLRule, share_item: Share, config: Config) -> bool:
+def is_adl_match(adl_item: ADLRule, share_item: Share) -> bool:
     return (
         is_source_match(adl_item, share_item)
         and is_regex_match(adl_item, share_item)
-        and is_size_match(adl_item, share_item, config)
+        and is_size_match(adl_item, share_item)
     )
 
 
@@ -241,14 +247,11 @@ def is_regex_match(adl_item: ADLRule, share_item: Share) -> bool:
     return adl_item.regex.search(text) is not None
 
 
-def is_size_match(adl_item: ADLRule, share_item: Share, config: Config) -> bool:
+def is_size_match(adl_item: ADLRule, share_item: Share) -> bool:
     if share_item.type == "Directory":
         return True
 
     min_size, max_size = adl_item.min_size, adl_item.max_size
-    if min_size == max_size == -1:
-        return True
-
     if _FILE_INDEX_DB:
         # Use FileIndex DB if available, faster than checking files on disk.
         # The DB stores a struct for each file consisting of the following values:
@@ -262,14 +265,18 @@ def is_size_match(adl_item: ADLRule, share_item: Share, config: Config) -> bool:
     else:
         file_size = getsize_proxy(share_item.path)
 
-    return file_size > -1 and min_size <= file_size <= max_size
+    return (
+        file_size > -1
+        and (min_size == -1 or file_size >= min_size)
+        and (max_size == -1 or file_size <= max_size)
+    )
 
 
 def getsize_proxy(full_path: str) -> int:
     global _PATH_SIZE_CACHE  # pylint: disable=global-statement
     hashed_path = hashlib.md5(full_path.encode("utf-8")).hexdigest()
 
-    if _PATH_SIZE_CACHE.get(hashed_path) is not None:
+    if _PATH_SIZE_CACHE.get(hashed_path, False):
         return _PATH_SIZE_CACHE[hashed_path]
 
     if not path.isfile(full_path):
@@ -293,7 +300,13 @@ def filter_matches(config: Config, matches: List[Match]) -> List[Match]:
     return [
         match
         for match in matches
-        if not any((match.share_item.path.startswith(ln) for ln in ignore_list))
+        if not any(
+            (
+                match.share_item.path.startswith(ln)
+                for ln in ignore_list
+                if ln and not ln.startswith("#")
+            )
+        )
     ]
 
 
@@ -466,8 +479,8 @@ def unboost_regex(pattern: str) -> str:
 @contextlib.contextmanager
 def file_info_db(path: str):
     with tempfile.TemporaryDirectory() as tmpdir:
-        dest = pathlib.Path(tmpdir).joinpath("FileIndex")
         print("Loading FileIndex DB...", end="", flush=True)
+        dest = pathlib.Path(tmpdir).joinpath("FileIndex")
         shutil.copytree(
             pathlib.Path(f"{path}/FileIndex/"),
             dest,
@@ -480,15 +493,18 @@ def file_info_db(path: str):
 if __name__ == "__main__":
     args = get_cli_arguments()
     config = get_config(args)
-    try:
-        import plyvel
-
-        with file_info_db(config.path) as db_path:
-            _FILE_INDEX_DB = plyvel.DB(str(db_path))
-            main(config)
-    except ImportError:
+    if args.no_db:
         main(config)
-    finally:
-        if _FILE_INDEX_DB and not _FILE_INDEX_DB.closed:
-            _FILE_INDEX_DB.close()
+    else:
+        try:
+            import plyvel
 
+            with file_info_db(config.path) as db_path:
+                _FILE_INDEX_DB = plyvel.DB(str(db_path))
+                main(config)
+        except ImportError:
+            print("Can't load FileIndex DB, falling back to filesystem.")
+            main(config)
+        finally:
+            if _FILE_INDEX_DB and not _FILE_INDEX_DB.closed:
+                _FILE_INDEX_DB.close()
