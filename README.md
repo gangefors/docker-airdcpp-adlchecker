@@ -1,11 +1,19 @@
 # AirDC++w ADL checker
 
-ADL search your share with the included Python script.
+Scan your share with ADLSearch using the included Python script.
 
-Run it seperately or using the Docker image.
+You need to add an ADLSearch.xml file to the AirDC++w config directory
+for the script to work.
 
-    # Python 3.7+
+If you are running AirDC++w using the gangefors/airdcpp-webclient Docker
+image, then running the script using Docker is recommended.
+Run the following command in a terminal on the same host as you are
+running the AirDC++w container.
+
+    docker run --rm --volumes-from <airdcpp-container-name-or-id> \
+        gangefors/airdcpp-adlchecker --help
+
+Or you can run the script in a terminal using Python 3.7+, check script
+file for additional info.
+
     python3 adlchecker.py --help
-
-    # Docker
-    docker run --rm --volumes-from <airdcpp-container> gangefors/airdcpp-adlchecker --help
